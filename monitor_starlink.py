@@ -126,6 +126,8 @@ def generate_static_dashboard(data, timestamp):
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monitoreo Starlink</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <style>
         :root {
             --bg-color: #0f172a; --card-bg: rgba(30, 41, 59, 0.7); --card-border: rgba(255, 255, 255, 0.1);
@@ -134,9 +136,15 @@ def generate_static_dashboard(data, timestamp):
         }
         body { margin: 0; font-family: 'Inter', sans-serif; background-color: var(--bg-color); color: var(--text-main); min-height: 100vh; }
         .container { max-width: 1200px; margin: 0 auto; padding: 40px 20px; }
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 1px solid var(--card-border); }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--card-border); }
         h1 { margin: 0; font-size: 28px; }
         .meta-info { text-align: right; font-size: 14px; color: var(--text-muted); }
+        
+        .tabs { display: flex; gap: 10px; margin-bottom: 30px; }
+        .tab-btn { background: var(--card-bg); border: 1px solid var(--card-border); color: var(--text-main); padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 500; transition: all 0.2s; }
+        .tab-btn:hover { background: rgba(255,255,255,0.1); }
+        .tab-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+        
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px; }
         .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
         .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
@@ -151,6 +159,10 @@ def generate_static_dashboard(data, timestamp):
         .stat-value { font-size: 24px; font-weight: 700; }
         .stat-active .stat-value { color: var(--active-color); }
         .stat-inactive .stat-value { color: var(--inactive-color); }
+        
+        #map-view { display: none; height: 600px; width: 100%; border-radius: 16px; overflow: hidden; border: 1px solid var(--card-border); }
+        .leaflet-popup-content-wrapper { background: var(--bg-color); color: var(--text-main); }
+        .leaflet-popup-tip { background: var(--bg-color); }
     </style>
 </head>
 <body>
@@ -162,12 +174,24 @@ def generate_static_dashboard(data, timestamp):
             <div>Total: <span id="total"></span> antenas</div>
         </div>
     </header>
+    
     <div class="stats-summary">
         <div class="stat-box stat-active"><div class="stat-value" id="active-count">0</div><div>Activas</div></div>
         <div class="stat-box stat-inactive"><div class="stat-value" id="inactive-count">0</div><div>Inactivas</div></div>
     </div>
-    <div class="grid" id="grid"></div>
+
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('list')">Lista de Antenas</button>
+        <button class="tab-btn" onclick="switchTab('map')">Mapa de Ecuador</button>
+    </div>
+
+    <div id="list-view" class="grid"></div>
+    <div id="map-view"></div>
 </div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
 <script>
     const data = REPLACE_ME_DATA;
     const timestamp = "REPLACE_ME_TIMESTAMP";
@@ -176,12 +200,20 @@ def generate_static_dashboard(data, timestamp):
     document.getElementById('total').textContent = data.length;
     
     let active = 0; let inactive = 0;
-    const grid = document.getElementById('grid');
+    const grid = document.getElementById('list-view');
+    
+    // Configurar mapa centrado en Ecuador
+    const map = L.map('map-view').setView([-1.8312, -78.1834], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        className: 'map-tiles'
+    }).addTo(map);
     
     data.forEach(a => {
         const isActive = a.estado.toLowerCase().includes('activo');
         if (isActive) active++; else inactive++;
         
+        // Agregar a la lista
         grid.innerHTML += `
             <div class="card">
                 <div class="card-header">
@@ -194,10 +226,42 @@ def generate_static_dashboard(data, timestamp):
                 </div>
             </div>
         `;
+        
+        // Agregar marcador al mapa
+        const coords = a.ubicacion.split(',');
+        if (coords.length === 2) {
+            const lat = parseFloat(coords[0].trim());
+            const lng = parseFloat(coords[1].trim());
+            if (!isNaN(lat) && !isNaN(lng)) {
+                L.circleMarker([lat, lng], {
+                    radius: 8,
+                    fillColor: isActive ? '#10b981' : '#ef4444',
+                    color: '#fff',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.9
+                }).bindPopup(`<strong style="font-size:16px">${a.nombre}</strong><br>Estado: <span style="color:${isActive ? '#10b981' : '#ef4444'}">${a.estado}</span><br>GPS: ${a.ubicacion}`).addTo(map);
+            }
+        }
     });
     
     document.getElementById('active-count').textContent = active;
     document.getElementById('inactive-count').textContent = inactive;
+    
+    function switchTab(tabId) {
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
+        
+        if (tabId === 'list') {
+            document.getElementById('list-view').style.display = 'grid';
+            document.getElementById('map-view').style.display = 'none';
+        } else {
+            document.getElementById('list-view').style.display = 'none';
+            document.getElementById('map-view').style.display = 'block';
+            // Refrescar tamaño del mapa para que cargue correctamente al cambiar de pestaña
+            setTimeout(() => map.invalidateSize(), 100);
+        }
+    }
 </script>
 </body>
 </html>"""
@@ -205,7 +269,7 @@ def generate_static_dashboard(data, timestamp):
     html_content = html_template.replace("REPLACE_ME_DATA", json.dumps(data)).replace("REPLACE_ME_TIMESTAMP", timestamp)
     with open("dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_content)
-    print("✅ Archivo dashboard.html generado exitosamente.")
+    print("✅ Archivo dashboard.html generado exitosamente con mapa integrado.")
 
 if __name__ == "__main__":
     fetch_starlink_data()
