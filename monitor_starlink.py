@@ -8,125 +8,112 @@ SESSION_FILE = "state.json"
 DATA_FILE = "starlink_data.json"
 
 def fetch_starlink_data():
-    print(f"[{datetime.now()}] Iniciando chequeo automático de Starlink...")
+    print(f"[{datetime.now()}] Iniciando chequeo automático de Starlink (Modo Rápido Corregido)...")
     
     if not os.path.exists(SESSION_FILE):
         print("❌ Error: No se encontró el archivo de sesión 'state.json'.")
-        print("Por favor, ejecuta primero 'python3 login_manual.py' para iniciar sesión manualmente.")
         return
     
     with sync_playwright() as p:
-        # Se ejecuta en modo headless (invisible) usando el Chrome real
-        browser = p.chromium.launch(headless=True, channel="chrome")
-        
-        print("Cargando sesión guardada...")
+        browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
         context = browser.new_context(storage_state=SESSION_FILE)
         page = context.new_page()
 
-        print("Navegando a la sección de Suscripciones...")
-        # Ir directo a suscripciones
         page.goto("https://www.starlink.com/account/subscriptions")
-        
-        # Esperar unos segundos para que carguen los datos dinámicos (SPA)
-        time.sleep(10) 
-        
-        # Verificar si la sesión caducó (nos redirige a auth)
-        if "auth" in page.url or page.locator("input[type='email']").is_visible():
-            print("⚠️ Tu sesión guardada ha expirado o no es válida.")
-            print("Por favor, vuelve a ejecutar 'python3 login_manual.py' para renovarla.")
-            browser.close()
-            return
-        
-        print("Extrayendo información de las antenas...")
+        time.sleep(10)
         
         subscriptions = []
         
-        # Intentamos localizar las filas de la tabla
-        # Como no sabemos el HTML exacto, buscamos elementos que contengan texto característico
-        # En tu captura, cada antena tiene un nombre y debajo la ubicación
-        
-        # Obtener todo el texto de la página y buscar patrones
-        # O intentar extraer roles genéricos
-        
-        # Estrategia general: vamos a extraer todos los elementos que parecen ser contenedores de antenas.
-        # Basado en la estructura de Starlink, los items suelen estar en listas
-        
-        # Obtendremos todos los textos que contengan "Ubicación:"
-        elements = page.locator("xpath=//div[contains(., 'Ubicación') or contains(., 'Location')]").all()
-        
-        if not elements:
-             # A veces están en spans o p
-             elements = page.locator("xpath=//*[contains(text(), 'Ubicación') or contains(text(), 'Location')]").all()
-        
-        print(f"Buscando contenedores... se analizará el contenido visible.")
-        
-        # Como es complejo sin ver el HTML, extraigamos el texto entero de la región principal (main) o body
-        main_content = page.locator("body").inner_text()
-        
-        # Vamos a dividirlo por líneas y buscar patrones
-        lines = main_content.split('\n')
-        
-        # Un escaneo simple: si vemos una línea con "Ubicación:", la línea anterior suele ser el nombre de la antena
-        # y la siguiente el estado.
-        for i, line in enumerate(lines):
-            line = line.strip()
-            if "Ubicación:" in line or "Location:" in line:
-                # La antena es probablemente la línea anterior o dos líneas atrás que no esté vacía
-                nombre = ""
-                for j in range(i-1, max(-1, i-4), -1):
-                    if lines[j].strip():
-                        nombre = lines[j].strip()
-                        break
+        options_count = 1
+        try:
+            avatar = page.locator("button", has_text="ML").first
+            if avatar.is_visible():
+                avatar.click()
+                time.sleep(3)
+                combobox = page.locator('li[role="combobox"]')
+                if combobox.is_visible():
+                    combobox.click()
+                    time.sleep(3)
+                    options_count = page.locator('li:has-text("ACC-")').count()
+                    if options_count == 0:
+                        options_count = 1
+                    page.keyboard.press("Escape")
+                    time.sleep(2)
+        except Exception as e:
+            print(f"No se pudo determinar cuentas múltiples, asumiendo 1. {e}")
+
+        for i in range(1, max(2, options_count)):
+            try:
+                page.goto("https://www.starlink.com/account/subscriptions")
+                time.sleep(8)
                 
-                estado = ""
-                # El estado es probablemente la siguiente línea que no esté vacía y que diga Activo o Offline
-                for j in range(i+1, min(len(lines), i+4)):
-                    if lines[j].strip():
-                        estado = lines[j].strip()
-                        break
+                if options_count > 1:
+                    avatar = page.locator("button", has_text="ML").first
+                    if avatar.is_visible():
+                        avatar.click()
+                        time.sleep(2)
+                        combobox = page.locator('li[role="combobox"]')
+                        if combobox.is_visible():
+                            combobox.click()
+                            time.sleep(2)
+                            opt = page.locator('li:has-text("ACC-")').nth(i)
+                            if opt.is_visible():
+                                opt.click()
+                                time.sleep(10)
                 
-                if nombre:
+                # Extraccion rápida agrupando por href
+                links = page.locator("a[href*='/account/service-line/']").all()
+                
+                href_groups = {}
+                for link in links:
+                    href = link.get_attribute("href")
+                    text = link.inner_text().strip()
+                    if href and text:
+                        if href not in href_groups:
+                            href_groups[href] = []
+                        href_groups[href].append(text)
+                        
+                for href, texts in href_groups.items():
+                    nombre = texts[0] if len(texts) > 0 else href.split("/")[-1]
+                    ubicacion = ""
+                    estado_val = "Inactivo"
+                    
+                    for t in texts:
+                        if "Ubicación:" in t or "Location:" in t:
+                            ubicacion = t.replace("Ubicación:", "").replace("Location:", "").strip()
+                        if "Activo" in t or "Active" in t:
+                            estado_val = "Activo"
+                            
                     subscriptions.append({
                         "nombre": nombre,
-                        "ubicacion": line.replace("Ubicación:", "").replace("Location:", "").strip(),
-                        "estado": estado
+                        "ubicacion": ubicacion,
+                        "estado": estado_val,
+                        "uso_datos": "N/A"
                     })
+            except Exception as e:
+                print(f"Error procesando cuenta {i}: {e}")
         
-        # Eliminar duplicados (a veces el inner_text trae elementos repetidos)
-        # Usamos un set para filtrar por nombre
         unique_subs = {sub['nombre']: sub for sub in subscriptions}.values()
         final_list = list(unique_subs)
         
         if final_list:
             with open(DATA_FILE, "w", encoding="utf-8") as f:
                 json.dump({"timestamp": datetime.now().isoformat(), "data": final_list}, f, indent=4, ensure_ascii=False)
-            print(f"✅ ¡Extraídas {len(final_list)} suscripciones exitosamente!")
             
-            # Imprimir para verificación
-            for s in final_list:
-                print(f" - {s['nombre']} | {s['ubicacion']} | {s['estado']}")
-                
-            # Generar HTML estático
             generate_static_dashboard(final_list, datetime.now().isoformat())
-                
         else:
-            print("⚠️ No se pudieron extraer las suscripciones correctamente.")
-            page.screenshot(path="debug_subscriptions.png")
-            print("Pantallazo guardado como 'debug_subscriptions.png' para analizar.")
+            print("⚠️ No se extrajeron antenas.")
 
         browser.close()
 
 def generate_static_dashboard(data, timestamp):
-    import json
-    
     html_template = """<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Monitoreo Starlink</title>
+    <title>Monitoreo Satelital</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <style>
         :root {
@@ -168,7 +155,7 @@ def generate_static_dashboard(data, timestamp):
 <body>
 <div class="container">
     <header>
-        <h1>Monitoreo Satelital</h1>
+        <h1>Monitoreo Satelital (Modo Rápido)</h1>
         <div class="meta-info">
             <div>Última actualización: <span id="timestamp"></span></div>
             <div>Total: <span id="total"></span> antenas</div>
@@ -189,9 +176,7 @@ def generate_static_dashboard(data, timestamp):
     <div id="map-view"></div>
 </div>
 
-<!-- Leaflet JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-
 <script>
     const data = REPLACE_ME_DATA;
     const timestamp = "REPLACE_ME_TIMESTAMP";
@@ -202,7 +187,6 @@ def generate_static_dashboard(data, timestamp):
     let active = 0; let inactive = 0;
     const grid = document.getElementById('list-view');
     
-    // Configurar mapa centrado en Ecuador
     const map = L.map('map-view').setView([-1.8312, -78.1834], 6);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors',
@@ -210,15 +194,14 @@ def generate_static_dashboard(data, timestamp):
     }).addTo(map);
     
     data.forEach(a => {
-        const isActive = a.estado.toLowerCase().includes('activo');
+        const isActive = a.estado.toLowerCase() === 'activo';
         if (isActive) active++; else inactive++;
         
-        // Agregar a la lista
         grid.innerHTML += `
             <div class="card">
                 <div class="card-header">
                     <h2 class="antena-name">${a.nombre}</h2>
-                    <span class="status-badge ${isActive ? 'status-active' : 'status-inactive'}">${isActive ? 'Activo' : a.estado}</span>
+                    <span class="status-badge ${isActive ? 'status-active' : 'status-inactive'}">${isActive ? 'Activo' : 'Inactivo'}</span>
                 </div>
                 <div>
                     <div class="info-row">Ubicación GPS: <span class="location-value">${a.ubicacion}</span></div>
@@ -227,7 +210,6 @@ def generate_static_dashboard(data, timestamp):
             </div>
         `;
         
-        // Agregar marcador al mapa
         const coords = a.ubicacion.split(',');
         if (coords.length === 2) {
             const lat = parseFloat(coords[0].trim());
@@ -240,7 +222,7 @@ def generate_static_dashboard(data, timestamp):
                     weight: 2,
                     opacity: 1,
                     fillOpacity: 0.9
-                }).bindPopup(`<strong style="font-size:16px">${a.nombre}</strong><br>Estado: <span style="color:${isActive ? '#10b981' : '#ef4444'}">${a.estado}</span><br>GPS: ${a.ubicacion}`).addTo(map);
+                }).bindPopup(`<strong>${a.nombre}</strong><br>Estado: ${a.estado}`).addTo(map);
             }
         }
     });
@@ -258,7 +240,6 @@ def generate_static_dashboard(data, timestamp):
         } else {
             document.getElementById('list-view').style.display = 'none';
             document.getElementById('map-view').style.display = 'block';
-            // Refrescar tamaño del mapa para que cargue correctamente al cambiar de pestaña
             setTimeout(() => map.invalidateSize(), 100);
         }
     }
@@ -269,7 +250,14 @@ def generate_static_dashboard(data, timestamp):
     html_content = html_template.replace("REPLACE_ME_DATA", json.dumps(data)).replace("REPLACE_ME_TIMESTAMP", timestamp)
     with open("dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_content)
-    print("✅ Archivo dashboard.html generado exitosamente con mapa integrado.")
+    
+    if os.path.exists('/var/www/html/starlink'):
+        try:
+            import shutil
+            shutil.copyfile('dashboard.html', '/var/www/html/starlink/index.html')
+            print("🌐 Dashboard publicado en el servidor web (http://10.11.121.101/starlink/)")
+        except Exception as e:
+            print(f"⚠️ Error al publicar: {e}")
 
 if __name__ == "__main__":
     fetch_starlink_data()
