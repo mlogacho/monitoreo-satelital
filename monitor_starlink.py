@@ -7,6 +7,33 @@ from alarm_notifier import check_and_send_alarms
 
 SESSION_FILE = "state.json"
 DATA_FILE = "starlink_data.json"
+MAX_RETRIES = 4          # intentos por navegación
+RETRY_WAIT  = 25         # segundos de espera entre reintentos
+
+
+def safe_goto(page, url, retries=MAX_RETRIES, wait_after=8):
+    """Navega a `url` con reintentos ante errores de red (ERR_NAME_NOT_RESOLVED,
+    ERR_NETWORK_CHANGED, timeout, etc.)."""
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            page.goto(url, timeout=60000)
+            time.sleep(wait_after)
+            return True
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            net_err = any(x in err_str for x in [
+                "ERR_NAME_NOT_RESOLVED", "ERR_NETWORK_CHANGED",
+                "ERR_INTERNET_DISCONNECTED", "ERR_CONNECTION_RESET",
+                "net::", "Timeout", "timeout",
+            ])
+            if net_err and attempt < retries:
+                print(f"      ⚠️  Red inestable (intento {attempt}/{retries}), esperando {RETRY_WAIT}s...")
+                time.sleep(RETRY_WAIT)
+            else:
+                break
+    raise last_err
 
 
 def check_device_status(page):
@@ -97,8 +124,7 @@ def fetch_starlink_data():
         context = browser.new_context(storage_state=SESSION_FILE, viewport={'width': 1920, 'height': 1080})
         page = context.new_page()
 
-        page.goto("https://www.starlink.com/account/subscriptions")
-        time.sleep(10)
+        safe_goto(page, "https://www.starlink.com/account/subscriptions", wait_after=10)
 
         subscriptions = []
         acc_set = []
@@ -161,10 +187,13 @@ def fetch_starlink_data():
         print(f"Se encontraron {len(acc_set)} cuentas únicas.")
 
         for idx, acc_id in enumerate(acc_set):
-            try:
+            account_ok = False
+            for acc_attempt in range(1, MAX_RETRIES + 1):
+              try:
+                if acc_attempt > 1:
+                    print(f"  ↩️  Reintentando cuenta {acc_id} (intento {acc_attempt}/{MAX_RETRIES})...")
                 print(f"--- Procesando Cuenta {idx+1}/{len(acc_set)} ({acc_id}) ---")
-                page.goto("https://www.starlink.com/account/subscriptions")
-                time.sleep(8)
+                safe_goto(page, "https://www.starlink.com/account/subscriptions", wait_after=8)
 
                 if acc_id != "DEFAULT":
                     avatar = page.locator("button", has_text="ML").first
@@ -249,8 +278,7 @@ def fetch_starlink_data():
                     estado_real = "Desconocido"
                     try:
                         print(f"    [{i+1}/{len(account_lines)}] Verificando {line['nombre']}...")
-                        page.goto(detail_url)
-                        time.sleep(6)
+                        safe_goto(page, detail_url, wait_after=6)
 
                         device_status = check_device_status(page)
                         if device_status:
@@ -278,8 +306,26 @@ def fetch_starlink_data():
                         "uso_datos": "N/A"
                     })
 
-            except Exception as e:
-                print(f"Error procesando cuenta {acc_id}: {e}")
+                account_ok = True
+                break  # cuenta procesada correctamente, salir del retry loop
+
+              except Exception as e:
+                err_str = str(e)
+                net_err = any(x in err_str for x in [
+                    "ERR_NAME_NOT_RESOLVED", "ERR_NETWORK_CHANGED",
+                    "ERR_INTERNET_DISCONNECTED", "ERR_CONNECTION_RESET",
+                    "net::", "Timeout", "timeout",
+                ])
+                if net_err and acc_attempt < MAX_RETRIES:
+                    print(f"  ⚠️  Error de red en cuenta {acc_id}: {e}")
+                    print(f"  ⏳ Esperando {RETRY_WAIT}s antes de reintentar la cuenta...")
+                    time.sleep(RETRY_WAIT)
+                else:
+                    print(f"Error procesando cuenta {acc_id} (intento {acc_attempt}): {e}")
+                    break
+
+            if not account_ok:
+                print(f"  ❌ Cuenta {acc_id} no pudo procesarse tras {MAX_RETRIES} intentos.")
 
         # Eliminar duplicados usando service_line_id (ID real de la línea de servicio)
         # Esto evita que estaciones con el mismo nombre en distintas cuentas se fusionen
