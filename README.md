@@ -34,7 +34,12 @@ Para asegurar el funcionamiento sin interrupciones cada 30 minutos, el *Cron Job
 ```
 
 ## Registro de Cambios y Optimizaciones
+- **Infraestructura (Junio 2026):** Resolución de conflictos de Nginx que causaban pantalla blanca y eliminación de redirecciones huérfanas en CRM derivadas de superposiciones de rutas.
 - **Corrección de DOM (Abril 2026):** Se actualizó el bucle de Playwright para agrupar las etiquetas `<a>` basadas en su atributo `href` en lugar de separar por líneas (`\n`), debido a una actualización de Starlink.
 - **Corrección de Nginx:** Se ajustó el directorio de despliegue de `/var/www/starlink/` a `/var/www/html/starlink/` para que coincida con el *Document Root* real del servidor.
 - **Corrección de Cron:** Se sustituyeron las rutas relativas en Linux por rutas absolutas en crontab para evitar fallos silenciosos.
 - **Escalabilidad a +80 antenas:** Se garantizó que el sistema espere a que la lista virtualizada renderice todas las cuentas al hacer scroll iterativo.
+
+## Solución de Problemas (Troubleshooting)
+- **Error enviando alarmas SMTP (`Name or service not known`):** Si el servidor DNS local (como Samba AD) intercepta el dominio corporativo, se debe agregar el hostname externo (ej. `mail.datacom.ec`) directamente al archivo `/etc/hosts` del servidor para que Python logre resolver y enviar las alertas correctamente.
+- **Pantalla Blanca al acceder por IP:** Si Nginx aloja otros sistemas (ej. React CRMs) en la misma IP, puede interceptar la ruta `/starlink/`. Asegúrese de añadir el alias `location /starlink/ { alias /var/www/html/starlink/; }` en cualquier otro bloque de servidor predominante para evitar que un enrutador frontend como Vite/React se apropie de la petición.
